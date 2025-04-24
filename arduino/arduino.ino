@@ -3,7 +3,7 @@
 const int STEP_PIN = 4;
 const int DIR_PIN = 5;
 const int FOCUS_PIN = 9;
-const int SHUTTER_PIN = 10;
+const int SHUTTER_PIN = 8;
 
 String serial_buffer = "";
 

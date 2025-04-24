@@ -1,10 +1,9 @@
 use log::{debug, info, trace};
 use opencv::{
-    core::{self, min_max_loc, Point, Scalar},
+    core::{self, min_max_loc, Point, Scalar,Vector},
     highgui,
     imgproc::{self, INTER_LINEAR},
     prelude::*,
-    types::VectorOfMat,
     videoio, Result,
 };
 use rodio::{source::Source, Decoder, OutputStream, OutputStreamHandle};
@@ -12,6 +11,7 @@ use serialport::SerialPort;
 use std::fs::File;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
+use std::env;
 
 #[derive(PartialEq)]
 enum Direction {
@@ -19,7 +19,7 @@ enum Direction {
     Left,
 }
 
-const FILM_MOVE_DIR: Direction = Direction::Right;
+const FILM_MOVE_DIR: Direction = Direction::Left;
 
 const MAX_SPEED: usize = 10000;
 
@@ -30,7 +30,7 @@ const MAX_SPEED: usize = 10000;
 /// This is useful for ignoring the edge of the frame either in the film
 /// or in the scanner itself. I'm also using a horizontal crop because my
 /// camera has a 16:9 HDMI output but the sensor is 3:2.
-const DETECTION_HORIZONTAL_CROP: f64 = (3.0 / 2.0) / (16.0 / 9.0);
+const DETECTION_HORIZONTAL_CROP: f64 = (2.8 / 2.0) / (16.0 / 9.0);
 const DETECTION_VERTICAL_CROP: f64 = 0.90;
 
 /// How many pixels one step corresponds to
@@ -39,7 +39,7 @@ const PX_PER_STEP: f64 = 1.7;
 /// How many steps are lost when transitioning from
 /// forward movement to backward movement due to slop
 /// between the gear and film sprockets.
-const SLOP_STEPS: usize = 20;
+const SLOP_STEPS: usize = 10;
 
 /// Always step this many extra steps when aligning frame, tries to ensure
 /// that the leading edge of the frame never ends up visible.
@@ -63,7 +63,7 @@ const MSEC_PER_1000_STEPS: u64 = 400;
 const STEPPER_ACCEL_TIME: u64 = 0;
 
 /// How many steps to move the film forward after taking a photo.
-const NEXT_FRAME_SKIP_STEPS: usize = 984;
+const NEXT_FRAME_SKIP_STEPS: usize = 1020;
 
 /// Slow film down for easier feeding when frame moves past this point (in
 /// percentage of width). Film is slowed down until DETECTION_POS
@@ -189,7 +189,7 @@ impl Scanner {
             steps += SLOP_STEPS;
         }
         self.set_speed(speed);
-        self.write(&format!("{}M", steps));
+        self.write(&format!("-{}M", steps));
         self.prev_dir = Some(Direction::Right);
         self.prev_cmd_was_stop = false;
     }
@@ -199,7 +199,7 @@ impl Scanner {
             steps += SLOP_STEPS;
         }
         self.set_speed(speed);
-        self.write(&format!("-{}M", steps));
+        self.write(&format!("{}M", steps));
         self.prev_dir = Some(Direction::Left);
         self.prev_cmd_was_stop = false;
     }
@@ -263,14 +263,14 @@ fn get_col_stats(mat: &Mat) -> Result<ColStats> {
     let mut mean_value = Mat::default();
     let mut std_value = Mat::default();
 
-    let mut col_mean = unsafe { Mat::new_nd(1, &mat.cols(), opencv::core::CV_64F)? };
-    let mut col_std_dev = unsafe { Mat::new_nd(1, &mat.cols(), opencv::core::CV_64F)? };
-    let mut col_diffs = unsafe { Mat::new_nd(1, &mat.cols(), opencv::core::CV_64F)? };
-    let mut col_mins = unsafe { Mat::new_nd(1, &mat.cols(), opencv::core::CV_64F)? };
-    let mut col_maxs = unsafe { Mat::new_nd(1, &mat.cols(), opencv::core::CV_64F)? };
+    let mut col_mean = unsafe { Mat::new_nd(&[1, mat.cols()], opencv::core::CV_64F)? };
+    let mut col_std_dev = unsafe { Mat::new_nd(&[1, mat.cols()], opencv::core::CV_64F)? };
+    let mut col_diffs = unsafe { Mat::new_nd(&[1, mat.cols()], opencv::core::CV_64F)? };
+    let mut col_mins = unsafe { Mat::new_nd(&[1, mat.cols()], opencv::core::CV_64F)? };
+    let mut col_maxs = unsafe { Mat::new_nd(&[1, mat.cols()], opencv::core::CV_64F)? };
 
     let mut mat_bw = Mat::default();
-    imgproc::cvt_color(&mat, &mut mat_bw, imgproc::COLOR_RGB2GRAY, 0)?;
+    imgproc::cvt_color(&mat, &mut mat_bw, imgproc::COLOR_RGB2GRAY, 0, opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
 
     for i in 0..mat.cols() {
         opencv::core::mean_std_dev(
@@ -337,7 +337,7 @@ fn dbg_col(mat: &Mat, winname: &str) -> Result<()> {
     imgproc::resize(
         &mat_show.clone(),
         &mut mat_show,
-        core::Size_::new(540, 480),
+        core::Size::new(540, 480),
         0.0,
         0.0,
         INTER_LINEAR,
@@ -381,17 +381,37 @@ impl Audio {
     }
 }
 
+
 fn main() -> Result<()> {
     env_logger::init();
     let audio = Audio::new();
+    
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        panic!("Please specify a camera index as command-line arguments");
+    }
+    let camera_index: i32 = args[1].parse().expect("Invalid camera index");
+    println!("Using camera index: {}", camera_index);
 
     let port_infos = serialport::available_ports().expect("No serial ports found");
-    let port_info = port_infos.first().expect("No serial ports found");
+    println!("Available ports:");
+    for (i, p) in port_infos.iter().enumerate() {
+        println!("{}. {}", i, p.port_name);
+    }
+
+    println!("Enter the number of the port to use:");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input).unwrap();
+    let port_index: usize = input.trim().parse().expect("Invalid input");
+
+    let port_info = &port_infos[port_index];
+    println!("Using port: {}", port_info.port_name);
+
     let port = serialport::new(port_info.port_name.clone(), 115_200)
         .timeout(Duration::from_secs(1))
         .open()
         .expect("Failed to open serial port");
-
+    info!("Opened serial port: {}", port_info.port_name);
     let mut pause = true;
     info!("Starting in paused/manual mode. Hit spacebar to start automation.");
     info!("Manual mode controls:");
@@ -405,8 +425,8 @@ fn main() -> Result<()> {
     info!("u = Stop focus");
 
     let mut scanner = Scanner::new(port);
-
-    let mut cam = videoio::VideoCapture::new(0, videoio::CAP_ANY)?; // 0 is the default camera
+    
+    let mut cam = videoio::VideoCapture::new(camera_index, videoio::CAP_ANY)?; // 0 is the default camera
 
     if !videoio::VideoCapture::is_opened(&cam)? {
         panic!("Unable to open default camera");
@@ -432,7 +452,7 @@ fn main() -> Result<()> {
         let cropped_x = ((frame_width - cropped_width) / 2.0).floor() + 2.0;
         let cropped_height = (frame_height * DETECTION_VERTICAL_CROP).floor();
         let cropped_y = ((frame_height - cropped_height) / 2.0).floor();
-
+        
         // Make sure we don't crop outside image (crashes opencv)
         let cropped_x = cropped_x.min(frame_width - cropped_width);
         let cropped_y = cropped_y.min(frame_height - cropped_height);
@@ -570,7 +590,7 @@ fn main() -> Result<()> {
 
         // Convert frame to grayscale
         let mut frame_bw = Mat::default();
-        imgproc::cvt_color(&frame_blurred, &mut frame_bw, imgproc::COLOR_RGB2GRAY, 0)?;
+        imgproc::cvt_color(&frame_blurred, &mut frame_bw, imgproc::COLOR_RGB2GRAY, 0, opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT)?;
         highgui::imshow("frame_bw", &frame_bw)?;
 
         // Find contours of mask
@@ -585,7 +605,7 @@ fn main() -> Result<()> {
             INTER_LINEAR,
         )?;
 
-        let mut contours = VectorOfMat::new();
+        let mut contours = Vector::<Mat>::new();
         imgproc::find_contours(
             &mask,
             &mut contours,
@@ -622,7 +642,7 @@ fn main() -> Result<()> {
             // })
             .collect();
 
-        let filtered_contours: VectorOfMat = ctrs.iter().map(|ctr| ctr.contour.clone()).collect();
+        let filtered_contours: Vector<Mat> = ctrs.iter().map(|ctr| ctr.contour.clone()).collect();
         imgproc::draw_contours(
             &mut frame,
             &filtered_contours,
@@ -693,7 +713,7 @@ fn main() -> Result<()> {
             pause = true;
             state.set(ScannerState::default());
 
-            scanner.move_right(5, Some(200));
+            scanner.move_right(5, Some(1000));
         }
         // FF right
         if key == '.' {
@@ -708,7 +728,7 @@ fn main() -> Result<()> {
             pause = true;
             state.set(ScannerState::default());
 
-            scanner.move_left(5, Some(200));
+            scanner.move_left(5, Some(300));
         }
         // FF left
         if key == '\'' {
@@ -740,6 +760,14 @@ fn main() -> Result<()> {
             state.set(ScannerState::default());
 
             scanner.stop_focus();
+        }
+
+        // Move to previous frame
+        if key == 'p' {
+            pause = true;
+            state.set(ScannerState::default());
+
+            scanner.move_left(NEXT_FRAME_SKIP_STEPS, None);
         }
 
         // Move to next frame
@@ -927,8 +955,8 @@ fn main() -> Result<()> {
                             dist_to_edge_gap_end, steps
                         );
 
-                        let slow_mode = dist_from_start / cropped_width >= FEED_SLOW_POS
-                            && dist_from_start / cropped_width < DETECTION_POS;
+                        let ratio = dist_from_start / cropped_width;
+                        let slow_mode = ratio >= FEED_SLOW_POS && ratio < DETECTION_POS;
                         let speed = if slow_mode { Some(500) } else { None };
 
                         match FILM_MOVE_DIR {

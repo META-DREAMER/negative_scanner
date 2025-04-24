@@ -60,9 +60,10 @@ After launching, the program is in manual mode. You should now be able to move t
 Pressing `n` will advance the film to the next frame. (based on a constant number of steps between frames that you may need to calibrate to match your setup & film)
 
 By pressing spacebar, you enter automatic mode. Pressing spacebar again re-enters manual mode. In automatic mode, the program:
+
 - Slowly steps the film forward, allowing you to feed in the next strip. Meanwhile, attempts to find areas of the video feed with bright vertical lines. These are hopefully areas between different frames in the film, or areas where there is no film yet/anymore.
 - If these areas are found past a certain "detection point", the distance from the edge of the screen to this area is converted to
-number of steps the motor should move, and the move is performed rapidly.
+  number of steps the motor should move, and the move is performed rapidly.
 - If no more areas are found, take a photo
 - Wait until the camera has finished taking the photo (currently based on counting the number of #000000 pixels, which may not work for all cameras)
 - Repeat from step one
@@ -70,3 +71,31 @@ number of steps the motor should move, and the move is performed rapidly.
 There's a number of constants you will most likely need to change at the top of the `src/main.rs` file, with explanations above each one of them. If you've never worked with Rust before and you need to dive deeper into the code, I recommend installing [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) for autocompletions in your IDE (available for other editors, too).
 
 Re-run with `cargo run --release` after making changes.
+
+### Manual Mode Controls
+
+- **Movement:**
+
+  - `e`: Move film forward (right) by a small amount (5 steps, slow speed).
+  - `.`: Move film forward (right) by a larger amount (100 steps, default speed).
+  - `a`: Move film backward (left) by a small amount (5 steps, slow speed).
+  - `'`: Move film backward (left) by a larger amount (100 steps, default speed).
+  - `n`: Advance film to the approximate position of the **next** frame (uses `NEXT_FRAME_SKIP_STEPS` constant).
+  - `p`: Rewind film to the approximate position of the **previous** frame (uses `NEXT_FRAME_SKIP_STEPS` constant).
+  - `g`: Attempt to automatically move to the **next detected frame gap** based on current view.
+  - `c`: Move film forward (right) by 1000 steps (useful for **calibrating** `PX_PER_STEP`).
+
+- **Camera Control:**
+
+  - `s`: Trigger the camera **shutter** (take a photo).
+  - `f`: Activate camera **focus** (half-press shutter).
+  - `u`: Deactivate camera **focus** (release half-press).
+
+- **State Control:**
+
+  - `r`: **Reset** the scanner's internal state to the default (AligningFrame). Stops any current automatic sequence.
+  - `t`: **Test** photo sequence (forces state to `TakingPhoto` - for debugging).
+
+- **General:**
+  - `q`: **Quit** the application.
+  - `spacebar`: Toggle between Manual and Automatic modes.
